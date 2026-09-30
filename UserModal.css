@@ -160,3 +160,30 @@
     opacity: 1;
   }
 }
+
+@media (max-width: 600px) {
+  .modal-card {
+    padding: 20px 16px;
+    border-radius: 16px;
+  }
+
+  .modal-header {
+    flex-direction: column;
+    text-align: center;
+    gap: 12px;
+  }
+
+  .modal-avatar {
+    width: 76px;
+    height: 76px;
+  }
+
+  .modal-stats {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .repos-grid {
+    grid-template-columns: 1fr;
+  }
+}
