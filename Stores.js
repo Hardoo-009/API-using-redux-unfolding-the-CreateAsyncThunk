@@ -1,10 +1,10 @@
 import { configureStore } from '@reduxjs/toolkit';
-import sliceReducer from './Slicer1';
+import githubReducer from './Slicer1';
 
-const stores = configureStore({
+const store = configureStore({
   reducer: {
-    slice1: sliceReducer,
+    github: githubReducer,
   },
 });
 
-export default stores;
+export default store;

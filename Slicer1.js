@@ -1,55 +1,235 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
 
-// we will be making a funtion actually , because the dispatch of this not a plain action which will be having the type and payload field , beacuse with AsyncThunk when we dispatch it is a function not an action so without going directly to the store it goes to slicer file and calls the fucntion "FetchData" which we make and this FetchData createAsyncThunk makes the dispatch call in a order . there are three dispatch it makes , which are nothing but the states of a promise which are pending , fulfilled and rejected , after this this goes to the main store and since there is no use of slice in this , so the message is broadcasted to all the slices in the store
+// Local storage helper for favorites persistence
+const loadFavoritesFromStorage = () => {
+  try {
+    const saved = localStorage.getItem('github_favorites');
+    return saved ? JSON.parse(saved) : [];
+  } catch (e) {
+    return [];
+  }
+};
 
-/*
-the real type of dispatch fn the asyncThunk function will be making in the backend
-action: {type:github/fetchData/pending , payload : undefined }
-action: {type:github/fetchData/fulfilled , payload : the data returned by the try block the real data }
-action: {type:github/fetchData/rejected , payload :the message returned from the catch block of the function }
-these goes to the store and then broadcasted to each and every store and in the store in the extra reducers it has the instructions of what to do actually
-*/
+const saveFavoritesToStorage = (favorites) => {
+  try {
+    localStorage.setItem('github_favorites', JSON.stringify(favorites));
+  } catch (e) {
+    console.error('Failed to save favorites to localStorage', e);
+  }
+};
+
+/**
+ * 1. Fetch a list of GitHub users (random list or paginated list)
+ * GET https://api.github.com/users?since={id}&per_page={count}
+ */
 const FetchData = createAsyncThunk(
-  'github/fetchData', // action
-  async (args, ThunkAPI) => {
+  'github/fetchData',
+  async ({ count = 10, since = 0, isPagination = false }, thunkAPI) => {
     try {
-      const request = await fetch(
-        `https://api.github.com/users?since=${args[1]}&per_page=${args[0]}`,
+      const response = await fetch(
+        `https://api.github.com/users?since=${since}&per_page=${count}`,
       );
-      const data = await request.json();
-      return data;
+
+      if (!response.ok) {
+        throw new Error(`GitHub API Error (Status ${response.status})`);
+      }
+
+      const data = await response.json();
+      return { data, isPagination };
     } catch (error) {
-      return RejectWithValue(error.message);
+      return thunkAPI.rejectWithValue(error.message || 'Failed to fetch users');
     }
   },
 );
-// fetch has a similar kind of state , having a loding , data and an error one as fixed
-const slice1 = createSlice({
-  name: 'slice1',
-  initialState: { loading: false, data: [], error: null, count: 10 },
+
+/**
+ * 2. Search for a specific GitHub user by username
+ * GET https://api.github.com/users/{username}
+ */
+const SearchUser = createAsyncThunk(
+  'github/searchUser',
+  async (username, thunkAPI) => {
+    try {
+      const trimmed = username.trim();
+      if (!trimmed) {
+        throw new Error('Please enter a username to search.');
+      }
+
+      const response = await fetch(`https://api.github.com/users/${trimmed}`);
+
+      if (response.status === 404) {
+        throw new Error(`User "${trimmed}" not found on GitHub.`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`GitHub API Error (Status ${response.status})`);
+      }
+
+      const user = await response.json();
+      return { data: [user], searchUsername: trimmed };
+    } catch (error) {
+      return thunkAPI.rejectWithValue(error.message || 'Failed to find user');
+    }
+  },
+);
+
+/**
+ * 3. Fetch User Details & Top Repositories for Modal
+ * GET https://api.github.com/users/{username}
+ * GET https://api.github.com/users/{username}/repos?sort=updated&per_page=6
+ */
+const FetchUserDetails = createAsyncThunk(
+  'github/fetchUserDetails',
+  async (username, thunkAPI) => {
+    try {
+      const [userRes, reposRes] = await Promise.all([
+        fetch(`https://api.github.com/users/${username}`),
+        fetch(
+          `https://api.github.com/users/${username}/repos?sort=updated&per_page=6`,
+        ),
+      ]);
+
+      if (!userRes.ok) throw new Error('Could not fetch profile details');
+      const userDetail = await userRes.json();
+      const repos = reposRes.ok ? await reposRes.json() : [];
+
+      return { userDetail, repos };
+    } catch (error) {
+      return thunkAPI.rejectWithValue(error.message);
+    }
+  },
+);
+
+const githubSlice = createSlice({
+  name: 'github',
+  initialState: {
+    loading: false,
+    data: [],
+    error: null,
+    count: 10,
+    since: 0,
+    searchQuery: '',
+    viewMode: 'list', // 'list' | 'search' | 'favorites'
+
+    // Modal state
+    selectedUserModal: null,
+    modalLoading: false,
+
+    // Favorites system
+    favorites: loadFavoritesFromStorage(),
+
+    // Filtering / Sorting
+    filterQuery: '',
+    sortBy: 'default', // 'default' | 'login-asc' | 'login-desc' | 'id-asc' | 'id-desc'
+  },
   reducers: {
-    Setcount: (state, action) => {
+    setCount: (state, action) => {
       state.count = action.payload;
+    },
+    setSearchQuery: (state, action) => {
+      state.searchQuery = action.payload;
+    },
+    setFilterQuery: (state, action) => {
+      state.filterQuery = action.payload;
+    },
+    setSortBy: (state, action) => {
+      state.sortBy = action.payload;
+    },
+    setViewMode: (state, action) => {
+      state.viewMode = action.payload;
+    },
+    resetPagination: (state) => {
+      state.since = 0;
+      state.data = [];
+      state.viewMode = 'list';
+      state.searchQuery = '';
+      state.filterQuery = '';
+    },
+    closeUserModal: (state) => {
+      state.selectedUserModal = null;
+    },
+
+    // Redux Favorite Toggle Reducer
+    toggleFavorite: (state, action) => {
+      const user = action.payload;
+      const index = state.favorites.findIndex((fav) => fav.id === user.id);
+
+      if (index >= 0) {
+        // Remove from favorites
+        state.favorites.splice(index, 1);
+      } else {
+        // Add to favorites
+        state.favorites.push(user);
+      }
+
+      saveFavoritesToStorage(state.favorites);
     },
   },
   extraReducers: (builder) => {
     builder
+      /* --- FetchData (List) --- */
       .addCase(FetchData.pending, (state) => {
-        // FetchData.pending -> github/fetchData/pending
         state.loading = true;
         state.error = null;
       })
       .addCase(FetchData.fulfilled, (state, action) => {
         state.loading = false;
-        state.data = action.payload;
+        const { data, isPagination } = action.payload;
+        state.viewMode = 'list';
+
+        if (isPagination) {
+          state.data = [...state.data, ...data];
+        } else {
+          state.data = data;
+        }
+
+        if (data.length > 0) {
+          state.since = data[data.length - 1].id;
+        }
       })
       .addCase(FetchData.rejected, (state, action) => {
         state.loading = false;
-        state.error = action.payload;
+        state.error = action.payload || 'An unexpected error occurred';
+      })
+
+      /* --- SearchUser --- */
+      .addCase(SearchUser.pending, (state) => {
+        state.loading = true;
+        state.error = null;
+      })
+      .addCase(SearchUser.fulfilled, (state, action) => {
+        state.loading = false;
+        state.viewMode = 'search';
+        state.data = action.payload.data;
+      })
+      .addCase(SearchUser.rejected, (state, action) => {
+        state.loading = false;
+        state.error = action.payload || 'Failed to find user';
+      })
+
+      /* --- FetchUserDetails (Modal) --- */
+      .addCase(FetchUserDetails.pending, (state) => {
+        state.modalLoading = true;
+      })
+      .addCase(FetchUserDetails.fulfilled, (state, action) => {
+        state.modalLoading = false;
+        state.selectedUserModal = action.payload;
+      })
+      .addCase(FetchUserDetails.rejected, (state) => {
+        state.modalLoading = false;
       });
   },
 });
 
-export default slice1.reducer;
-export { FetchData };
-export const { Setcount } = slice1.actions;
+export default githubSlice.reducer;
+export { FetchData, FetchUserDetails, SearchUser };
+export const {
+  setCount,
+  setSearchQuery,
+  setFilterQuery,
+  setSortBy,
+  setViewMode,
+  resetPagination,
+  closeUserModal,
+  toggleFavorite,
+} = githubSlice.actions;
